@@ -1,0 +1,65 @@
+{
+  "rules": [
+    {
+      "name": "market_item_json",
+      "record_type": "market_item",
+      "match": {
+        "method": "GET",
+        "host_contains": "",
+        "path_contains": "/api/market/item"
+      },
+      "extractors": [
+        {
+          "field": "item_key",
+          "source": "response_body",
+          "kind": "gjson",
+          "pattern": "item.id"
+        },
+        {
+          "field": "item_name",
+          "source": "response_body",
+          "kind": "gjson",
+          "pattern": "item.name"
+        },
+        {
+          "field": "unit_price",
+          "source": "response_body",
+          "kind": "gjson",
+          "pattern": "item.price"
+        },
+        {
+          "field": "quantity",
+          "source": "response_body",
+          "kind": "gjson",
+          "pattern": "item.quantity"
+        }
+      ]
+    },
+    {
+      "name": "market_item_regex_fallback",
+      "record_type": "market_item",
+      "match": {
+        "method": "GET",
+        "host_contains": "",
+        "path_contains": "/api/market/item"
+      },
+      "extractors": [
+        {
+          "field": "item_name",
+          "source": "response_body",
+          "kind": "regex",
+          "pattern": "\"name\"\\s*:\\s*\"([^\"]+)\"",
+          "group": 1
+        },
+        {
+          "field": "unit_price",
+          "source": "response_body",
+          "kind": "regex",
+          "pattern": "\"price\"\\s*:\\s*([0-9]+(?:\\.[0-9]+)?)",
+          "group": 1
+        }
+      ]
+    }
+  ]
+}
+
