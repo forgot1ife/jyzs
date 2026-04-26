@@ -16,26 +16,26 @@ type SQLiteStore struct {
 }
 
 type CaptureEvent struct {
-	At           time.Time
-	RuleName     string
-	RecordType   string
-	Method       string
-	Host         string
-	Path         string
-	StatusCode   int
-	RequestSize  int
-	ResponseSize int
-	Fields       map[string]any
+	At           time.Time      `json:"at"`
+	RuleName     string         `json:"rule_name"`
+	RecordType   string         `json:"record_type"`
+	Method       string         `json:"method"`
+	Host         string         `json:"host"`
+	Path         string         `json:"path"`
+	StatusCode   int            `json:"status_code"`
+	RequestSize  int            `json:"request_size"`
+	ResponseSize int            `json:"response_size"`
+	Fields       map[string]any `json:"fields"`
 }
 
 type PriceSnapshot struct {
-	At         time.Time
-	ItemKey    string
-	ItemName   string
-	UnitPrice  float64
-	Quantity   int64
-	SourceRule string
-	RawJSON    string
+	At         time.Time `json:"at"`
+	ItemKey    string    `json:"item_key"`
+	ItemName   string    `json:"item_name"`
+	UnitPrice  float64   `json:"unit_price"`
+	Quantity   int64     `json:"quantity"`
+	SourceRule string    `json:"source_rule"`
+	RawJSON    string    `json:"raw_json"`
 }
 
 type Recommendation struct {
@@ -46,6 +46,17 @@ type Recommendation struct {
 	BaselinePrice float64   `json:"baseline_price"`
 	DiscountPct   float64   `json:"discount_pct"`
 	Reason        string    `json:"reason"`
+}
+
+type CharacterStatus struct {
+	At             time.Time `json:"at"`
+	PlayerName     string    `json:"player_name"`
+	LoginSucceeded bool      `json:"login_succeeded"`
+	LoginAccount   string    `json:"login_account"`
+	AreaName       string    `json:"area_name"`
+	ServerName     string    `json:"server_name"`
+	Source         string    `json:"source"`
+	RawLine        string    `json:"raw_line"`
 }
 
 func NewSQLiteStore(path string) (*SQLiteStore, error) {
@@ -195,8 +206,182 @@ func (s *SQLiteStore) ListRecommendations(limit int) ([]Recommendation, error) {
 	return out, rows.Err()
 }
 
+func (s *SQLiteStore) InsertCharacterStatus(status CharacterStatus) error {
+	if status.At.IsZero() {
+		status.At = time.Now()
+	}
+
+	loginSucceeded := 0
+	if status.LoginSucceeded {
+		loginSucceeded = 1
+	}
+
+	_, err := s.db.Exec(`
+		INSERT INTO character_status (
+			at, player_name, login_succeeded, login_account, area_name, server_name, source, raw_line
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		status.At.UTC().Format(time.RFC3339Nano),
+		status.PlayerName,
+		loginSucceeded,
+		status.LoginAccount,
+		status.AreaName,
+		status.ServerName,
+		status.Source,
+		status.RawLine,
+	)
+	return err
+}
+
+func (s *SQLiteStore) LatestCharacterStatus() (*CharacterStatus, error) {
+	var (
+		atRaw      string
+		status     CharacterStatus
+		loginAsInt int
+	)
+	err := s.db.QueryRow(`
+		SELECT at, player_name, login_succeeded, login_account, area_name, server_name, source, raw_line
+		FROM character_status
+		ORDER BY at DESC
+		LIMIT 1`,
+	).Scan(
+		&atRaw,
+		&status.PlayerName,
+		&loginAsInt,
+		&status.LoginAccount,
+		&status.AreaName,
+		&status.ServerName,
+		&status.Source,
+		&status.RawLine,
+	)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	if parsed, err := time.Parse(time.RFC3339Nano, atRaw); err == nil {
+		status.At = parsed
+	}
+	status.LoginSucceeded = loginAsInt == 1
+	return &status, nil
+}
+
+func (s *SQLiteStore) ListCaptureEvents(limit int, ruleName string) ([]CaptureEvent, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+
+	var (
+		rows *sql.Rows
+		err  error
+	)
+	if ruleName == "" {
+		rows, err = s.db.Query(`
+			SELECT at, rule_name, record_type, method, host, path, status_code, request_size, response_size, fields_json
+			FROM capture_events
+			ORDER BY at DESC
+			LIMIT ?`, limit)
+	} else {
+		rows, err = s.db.Query(`
+			SELECT at, rule_name, record_type, method, host, path, status_code, request_size, response_size, fields_json
+			FROM capture_events
+			WHERE rule_name = ?
+			ORDER BY at DESC
+			LIMIT ?`, ruleName, limit)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make([]CaptureEvent, 0, limit)
+	for rows.Next() {
+		var atRaw string
+		var fieldsRaw string
+		var evt CaptureEvent
+		if err := rows.Scan(
+			&atRaw,
+			&evt.RuleName,
+			&evt.RecordType,
+			&evt.Method,
+			&evt.Host,
+			&evt.Path,
+			&evt.StatusCode,
+			&evt.RequestSize,
+			&evt.ResponseSize,
+			&fieldsRaw,
+		); err != nil {
+			return nil, err
+		}
+
+		if parsed, err := time.Parse(time.RFC3339Nano, atRaw); err == nil {
+			evt.At = parsed
+		}
+		if fieldsRaw != "" {
+			_ = json.Unmarshal([]byte(fieldsRaw), &evt.Fields)
+		}
+		if evt.Fields == nil {
+			evt.Fields = map[string]any{}
+		}
+		out = append(out, evt)
+	}
+	return out, rows.Err()
+}
+
+func (s *SQLiteStore) ListPriceSnapshots(limit int, itemKey string) ([]PriceSnapshot, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+
+	var (
+		rows *sql.Rows
+		err  error
+	)
+	if itemKey == "" {
+		rows, err = s.db.Query(`
+			SELECT at, item_key, item_name, unit_price, quantity, source_rule, raw_json
+			FROM price_snapshots
+			ORDER BY at DESC
+			LIMIT ?`, limit)
+	} else {
+		rows, err = s.db.Query(`
+			SELECT at, item_key, item_name, unit_price, quantity, source_rule, raw_json
+			FROM price_snapshots
+			WHERE item_key = ?
+			ORDER BY at DESC
+			LIMIT ?`, itemKey, limit)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make([]PriceSnapshot, 0, limit)
+	for rows.Next() {
+		var atRaw string
+		var row PriceSnapshot
+		if err := rows.Scan(
+			&atRaw,
+			&row.ItemKey,
+			&row.ItemName,
+			&row.UnitPrice,
+			&row.Quantity,
+			&row.SourceRule,
+			&row.RawJSON,
+		); err != nil {
+			return nil, err
+		}
+		if parsed, err := time.Parse(time.RFC3339Nano, atRaw); err == nil {
+			row.At = parsed
+		}
+		out = append(out, row)
+	}
+	return out, rows.Err()
+}
+
 func (s *SQLiteStore) Counts() (map[string]int64, error) {
-	tables := []string{"capture_events", "price_snapshots", "recommendations"}
+	tables := []string{"capture_events", "price_snapshots", "recommendations", "character_status"}
 	out := map[string]int64{}
 	for _, table := range tables {
 		var c int64
@@ -248,6 +433,18 @@ func createSchema(db *sql.DB) error {
 			reason TEXT NOT NULL
 		);`,
 		`CREATE INDEX IF NOT EXISTS idx_recommendations_at ON recommendations(at DESC);`,
+		`CREATE TABLE IF NOT EXISTS character_status (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			at TEXT NOT NULL,
+			player_name TEXT NOT NULL,
+			login_succeeded INTEGER NOT NULL,
+			login_account TEXT NOT NULL,
+			area_name TEXT NOT NULL,
+			server_name TEXT NOT NULL,
+			source TEXT NOT NULL,
+			raw_line TEXT NOT NULL
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_character_status_at ON character_status(at DESC);`,
 	}
 	for _, stmt := range stmts {
 		if _, err := db.Exec(stmt); err != nil {
@@ -256,4 +453,3 @@ func createSchema(db *sql.DB) error {
 	}
 	return nil
 }
-

@@ -10,6 +10,9 @@ import (
 
 type Store interface {
 	ListRecommendations(limit int) ([]storage.Recommendation, error)
+	ListCaptureEvents(limit int, ruleName string) ([]storage.CaptureEvent, error)
+	ListPriceSnapshots(limit int, itemKey string) ([]storage.PriceSnapshot, error)
+	LatestCharacterStatus() (*storage.CharacterStatus, error)
 	Counts() (map[string]int64, error)
 }
 
@@ -45,6 +48,49 @@ func NewServer(addr string, store Store) *http.Server {
 		}
 		writeJSON(w, http.StatusOK, map[string]any{
 			"items": rows,
+		})
+	})
+
+	mux.HandleFunc("/events", func(w http.ResponseWriter, r *http.Request) {
+		limit := parseLimit(r, 20)
+		ruleName := r.URL.Query().Get("rule_name")
+		rows, err := store.ListCaptureEvents(limit, ruleName)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{
+				"error": err.Error(),
+			})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"items": rows,
+		})
+	})
+
+	mux.HandleFunc("/prices", func(w http.ResponseWriter, r *http.Request) {
+		limit := parseLimit(r, 20)
+		itemKey := r.URL.Query().Get("item_key")
+		rows, err := store.ListPriceSnapshots(limit, itemKey)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{
+				"error": err.Error(),
+			})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"items": rows,
+		})
+	})
+
+	mux.HandleFunc("/character/latest", func(w http.ResponseWriter, _ *http.Request) {
+		row, err := store.LatestCharacterStatus()
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{
+				"error": err.Error(),
+			})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"item": row,
 		})
 	})
 

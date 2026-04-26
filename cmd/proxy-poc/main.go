@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"jyzs_proxy_poc/internal/admin"
+	"jyzs_proxy_poc/internal/character"
 	"jyzs_proxy_poc/internal/processor"
 	"jyzs_proxy_poc/internal/proxy"
 	"jyzs_proxy_poc/internal/reco"
@@ -30,6 +31,9 @@ func main() {
 		windowSize        = flag.Int("window-size", 30, "number of recent prices used as baseline window")
 		minSamples        = flag.Int("min-samples", 8, "minimum samples before leak recommendation")
 		discountThreshold = flag.Float64("discount-threshold", 0.2, "recommend when price <= baseline*(1-threshold)")
+		traceLogPath      = flag.String("trace-log", "", "optional game trace.log path for character status collection")
+		systemSetPath     = flag.String("system-set", "", "optional game system_set.ini path for character metadata")
+		charPollSeconds   = flag.Int("char-poll-seconds", 2, "character log polling interval seconds")
 	)
 	flag.Parse()
 
@@ -59,6 +63,18 @@ func main() {
 		}
 	}()
 
+	charCollectorCtx, charCollectorCancel := context.WithCancel(context.Background())
+	defer charCollectorCancel()
+	if *traceLogPath != "" {
+		collector := character.NewCollector(character.Config{
+			TraceLogPath:  *traceLogPath,
+			SystemSetPath: *systemSetPath,
+			PollInterval:  time.Duration(*charPollSeconds) * time.Second,
+		}, db)
+		go collector.Run(charCollectorCtx)
+		log.Printf("character collector enabled trace=%s system_set=%s", *traceLogPath, *systemSetPath)
+	}
+
 	proxySrv, err := proxy.NewServer(proxy.Config{
 		ListenAddr:   *proxyListen,
 		MaxBodyBytes: int64(*maxBodyKB) * 1024,
@@ -82,6 +98,8 @@ func main() {
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
 	<-stop
 
+	charCollectorCancel()
+
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
@@ -89,4 +107,3 @@ func main() {
 	_ = adminSrv.Shutdown(ctx)
 	log.Println("shutdown complete")
 }
-
